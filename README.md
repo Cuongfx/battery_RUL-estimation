@@ -22,8 +22,6 @@ Boundaries live in one place (`RUL_EDGES` in `dataset_clf_bml_v2.py`); class cou
 - [Pipeline](#pipeline)
 - [Usage](#usage)
 - [Automation scripts](#automation-scripts)
-  - [On a SLURM cluster](#on-a-slurm-cluster)
-  - [Cluster setup](#cluster-setup)
 - [Model architectures](#model-architectures)
 - [Feature engineering](#feature-engineering)
 - [File structure](#file-structure)
@@ -111,33 +109,6 @@ PowerShell wrappers that chain the CLI calls above for batch runs, kept in `RunT
 | `RunToTrain/run_exp_15.ps1` | Grid search over the input window — `N_EARLY` x `N_RANDOM` (values 2–10) — on one dataset (`-ContentDir`, default `./content_bml/MATR`), 5 repeats per combo, to see how much lead-in vs. random-window history the model needs. | 1 model, many configs |
 
 Typical order: `RunToTrain\run_dataset.ps1` → `RunToTrain\run_train_all_default.ps1` (or `RunToTrain\run_train_all_model.ps1` for all three architectures) → `RunToTrain\run_model_adjust.ps1` / `RunToTrain\run_exp_15.ps1` for hyperparameter sweeps once a baseline works.
-
-### On a SLURM cluster
-
-`RunToTrainServer/` mirrors the five scripts above for a SLURM batch system. Same names, same grids, same output layout — the difference is that nothing runs on the login node: each script writes a job directory under `jobs/<name>_<timestamp>/` holding a `params.txt` (one python command per line) and a `job.sh`, then submits them as a single **array job**, so the 144-run and 125-run grids queue as 144 and 125 tasks instead of one 10-hour serial job.
-
-```bash
-pwsh ./RunToTrainServer/run_dataset.ps1                       # 3 tasks, CPU only
-pwsh ./RunToTrainServer/run_train_all_default.ps1             # 3 tasks, 1 GPU each
-pwsh ./RunToTrainServer/run_train_all_model.ps1 -TrainScript 2
-pwsh ./RunToTrainServer/run_exp_15.ps1 -Throttle 8            # 125 tasks, 8 at a time
-```
-
-Needs `pwsh` (PowerShell 7) on the cluster — see [Cluster setup](#cluster-setup). Every script takes `-Account`, `-Qos`, `-Gpu`, `-Cpus`, `-Mem`, `-Time`, `-CondaEnv` and `-Throttle` (how many array tasks may run at once), plus `-DryRun` to write the job script and print the `sbatch` line without submitting. The `module load` and conda bootstrap lines live in `RunToTrainServer/_SlurmCommon.ps1` — change them there once, not in five files.
-
-`jobs/` and `logs/` are generated and not committed.
-
-### Cluster setup
-
-`pwsh` is not installed on most HPC systems. Check, then install it into your conda environment if it is missing:
-
-```bash
-which pwsh || module avail 2>&1 | grep -i powershell
-conda activate battery_ml
-conda install -c conda-forge powershell_core     # provides `pwsh`
-```
-
-If neither works, unpack the official tarball into your home directory and add it to `PATH`. Beyond that, the cluster needs: the repo cloned, `Raw/Raw_BML/` and `content_bml/` copied over (`rsync -avz`), and a conda environment matching `-CondaEnv`.
 
 ---
 
@@ -239,10 +210,7 @@ battery_estimation/
 ├── train_clf_bml_transformer_V2.py # transformer trainer, self-contained
 ├── train_clf_es_bml_V2.py          # sparse CMA-ES trainer
 ├── predict_clf_bml_V2.ipynb        # inference & visualisation
-├── RunToTrain/                     # PowerShell batch-run wrappers, local Windows
-├── RunToTrainServer/               # same wrappers, submitted as SLURM array jobs
-├── jobs/                           # generated job.sh + params.txt per submission
-├── logs/                           # SLURM stdout/stderr per array task (generated)
+├── RunToTrain/                     # PowerShell batch-run wrappers (see Automation scripts)
 ├── document/                       # what_changed.md and other reference docs
 └── README.md
 ```

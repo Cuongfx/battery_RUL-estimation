@@ -1,0 +1,655 @@
+### CELL 1
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import joblib
+
+from dataset_clf_bml import (
+    build_sample_index, load_all_npz,
+    N_CLASSES, N_EARLY, N_RANDOM, N_INPUT,
+    rul_to_class, V_BINS, REF_CYCLE, _build_sample_tensors
+)
+from train_clf_bml import BatteryRULClassifier
+
+# ── Config ──────────────────────────────────────────────────────────────────
+dataset = 'MATR'
+DATA_DIR    = f'./content_bml/{dataset}'
+
+checkpoints_path = f'./checkpoints_clf_bml_{dataset}/' 
+MODEL_PATH  = checkpoints_path + 'best_clf_bml.pt'
+DEVICE      = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+print(f'Device: {DEVICE}')
+
+SUMMARY_FEATS = 12
+
+CLASS_NAMES   = ["RUL>400", "RUL 300–400", "RUL 200–300", "RUL 100–200", "RUL<100"]
+CLASS_COLORS  = ["#1565C0", "#2E7D32", "#F9A825", "#E65100", "#B71C1C"]
+### CELL 3
+# Load all three .mat files
+cells = load_all_npz(DATA_DIR)
+### CELL 4
+# Load trained model
+model = BatteryRULClassifier(
+        summary_feats = SUMMARY_FEATS,
+        gru_layers=2,
+        n_classes     = N_CLASSES).to(DEVICE)
+
+model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
+model.eval().to(DEVICE)
+
+dq_scaler      = joblib.load(checkpoints_path + 'dq_scaler_bml.pkl')
+summary_scaler = joblib.load(checkpoints_path + 'summary_scaler_bml.pkl')
+scalers        = (dq_scaler, summary_scaler)
+
+n_params = sum(p.numel() for p in model.parameters())
+print(f'Model loaded — {n_params:,} parameters')
+
+
+### CELL 5
+@torch.no_grad()
+def predict_cell(cell: dict, scalers = None):
+    """
+    Slide a 24-cycle window across the entire cell life.
+    Returns arrays aligned to window end-cycle.
+    """
+ 
+    cycle_life = int(cell["cycle_life"])
+    
+    
+    end_cycles   = []
+    pred_classes = []
+    true_classes = []
+    pred_probs   = []
+
+    for start in range(N_EARLY, cycle_life - N_RANDOM-1):
+        
+        end_cycle = start + N_RANDOM
+        
+        dq_sc, sum_sc = scalers
+        dq_seq, summary_seq = _build_sample_tensors(cell, start, dq_sc, sum_sc) 
+            
+        dq_t = dq_seq.unsqueeze(0).to(DEVICE)
+        sum_t = summary_seq.unsqueeze(0).to(DEVICE)
+
+        logits = model(dq_t, sum_t).squeeze(0)           # (N_CLASSES,)
+        
+        probs  = torch.softmax(logits, dim=-1).cpu().numpy()
+        pred_c = int(probs.argmax())
+
+        rul    = max(0, cycle_life - end_cycle)
+        true_c = rul_to_class(rul)
+
+        end_cycles.append(end_cycle)
+        pred_classes.append(pred_c)
+        true_classes.append(true_c)
+        pred_probs.append(probs)
+
+    return {
+        "end_cycles":   np.array(end_cycles),
+        "pred_classes": np.array(pred_classes),
+        "true_classes": np.array(true_classes),
+        "pred_probs":   np.array(pred_probs),    # (W, N_CLASSES)
+        "cycle_life":   cycle_life,
+        "accuracy":     float((np.array(pred_classes) == np.array(true_classes)).mean()),
+    }
+### CELL 7
+TestCellName = ['MATR_b4c34', 'MATR_b2c22', 'MATR_b1c18', 'MATR_b1c42',
+                'MATR_b4c1', 'MATR_b1c34', 'MATR_b2c24', 'MATR_b3c17',
+                'MATR_b3c6', 'MATR_b3c33', 'MATR_b2c3', 'MATR_b1c5',
+                'MATR_b1c35', 'MATR_b4c11', 'MATR_b1c30', 'MATR_b4c21']
+
+CELL_ID      = 'MATR_b4c34'
+
+# TestCellName = ['HUST_7-5', 'HUST_6-3', 'HUST_6-6', 'HUST_7-6',
+#                 'HUST_5-4', 'HUST_3-2', 'HUST_2-4']
+# CELL_ID      = 'HUST_7-5'
+
+if CELL_ID is None:
+    CELL_ID = list(cells.keys())[0]
+print(f"Cell: {CELL_ID}")
+
+cell       = cells[CELL_ID]
+cycle_life = int(cell["cycle_life"])
+
+res = predict_cell(cell, scalers=scalers)
+
+print(f"Sliding-window accuracy: {res['accuracy']:.4f}  "
+      f"({len(res['end_cycles'])} windows  cycle_life={res['cycle_life']})")
+
+# ── Plot ─────────────────────────────────────────────────────────────────────
+fig, axes = plt.subplots(3, 1, figsize=(14, 12),
+                         gridspec_kw={"height_ratios": [2, 2, 1.2]})
+fig.suptitle(f"RUL Classification — Cell: {CELL_ID}  "
+             f"(cycle life: {res['cycle_life']})  "
+             f"Accuracy: {res['accuracy']:.2%}",
+             fontsize=13, fontweight="bold")
+
+cycles      = res["end_cycles"]
+pred_cls    = res["pred_classes"]
+true_cls    = res["true_classes"]
+pred_probs  = res["pred_probs"]
+
+# ── Panel 1: predicted vs true class over cycle ───────────────────────────
+ax = axes[0]
+ax.step(cycles, true_cls, where="post", color="#1565C0", lw=2.5,
+        label="True class", zorder=3)
+ax.step(cycles, pred_cls, where="post", color="#E53935", lw=1.8,
+        ls="--", label="Predicted class", zorder=4)
+ax.set_yticks(range(N_CLASSES))
+ax.set_yticklabels(CLASS_NAMES, fontsize=9)
+ax.set_ylabel("RUL Class", fontsize=11)
+ax.set_title("Predicted vs True RUL Class Over Cycle Life")
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.25)
+
+# shade correct / incorrect windows
+correct = pred_cls == true_cls
+ax.fill_between(cycles, -0.4, N_CLASSES - 0.6,
+                where=correct,  alpha=0.08, color="green",  step="post")
+ax.fill_between(cycles, -0.4, N_CLASSES - 0.6,
+                where=~correct, alpha=0.12, color="red",    step="post")
+ax.set_ylim(-0.4, N_CLASSES - 0.6)
+
+# ── Panel 2: predicted class probability over cycle ───────────────────────
+ax = axes[1]
+for c in range(N_CLASSES):
+    ax.plot(cycles, pred_probs[:, c], color=CLASS_COLORS[c],
+            lw=1.5, label=CLASS_NAMES[c], alpha=0.85)
+ax.set_ylabel("Softmax Probability", fontsize=11)
+ax.set_title("Predicted Class Probabilities")
+ax.legend(fontsize=8.5, ncol=N_CLASSES, loc="upper right")
+ax.grid(True, alpha=0.25)
+ax.set_ylim(-0.05, 1.05)
+
+# ── Panel 3: error (mismatch) ─────────────────────────────────────────────
+ax = axes[2]
+error = pred_cls - true_cls
+ax.bar(cycles, error, width=1.0,
+       color=["#E53935" if e != 0 else "#43A047" for e in error],
+       alpha=0.75)
+ax.axhline(0, color="black", lw=0.8)
+ax.set_xlabel("Window End Cycle", fontsize=11)
+ax.set_ylabel("Class Error\n(pred − true)", fontsize=10)
+ax.set_title("Classification Error per Window")
+ax.grid(True, alpha=0.25)
+
+# legend patches
+patches = [
+    mpatches.Patch(color="#43A047", alpha=0.75, label="Correct"),
+    mpatches.Patch(color="#E53935", alpha=0.75, label="Incorrect"),
+]
+ax.legend(handles=patches, fontsize=9)
+
+plt.tight_layout()
+out_path = f"{CELL_ID}_clf_prediction.png"
+plt.savefig(out_path, dpi=150, bbox_inches="tight")
+print(f"Saved: {out_path}")
+plt.show()
+### CELL 9
+# ── Run inference on ALL cells ────────────────────────────────────────────────
+from matplotlib.lines import Line2D
+import matplotlib.patches as mpatches
+
+print("Running inference on all cells...")
+all_results = {}
+test_cell = {}
+for cellname in TestCellName:
+    test_cell[cellname] =  cells[cellname]
+
+for cid, cell in test_cell.items():
+    r = predict_cell(cell, scalers=scalers)
+    if r is not None and len(r["end_cycles"]) > 0:
+        all_results[cid] = r
+print(f"Predicted {len(all_results)} cells")
+
+# ── Grid plot ─────────────────────────────────────────────────────────────────
+n     = len(all_results)
+ncols = 4
+nrows = (n + ncols - 1) // ncols
+
+fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 3.5, nrows * 3),
+                         constrained_layout=True)
+fig.suptitle("All Cells — Predicted vs True RUL Class Over Cycle Life",
+             fontsize=14, fontweight="bold", y=1.01)
+
+axes_flat = axes.flatten() if n > 1 else [axes]
+
+for ax, (cid, r) in zip(axes_flat, all_results.items()):
+    cyc      = r["end_cycles"]
+    pred_cls = r["pred_classes"]
+    true_cls = r["true_classes"]
+    correct  = pred_cls == true_cls
+
+    ax.step(cyc, true_cls, where="post", color="#1565C0", lw=1.8)
+    ax.step(cyc, pred_cls, where="post", color="#E53935", lw=1.4, ls="--")
+
+    ax.fill_between(cyc, -0.4, N_CLASSES - 0.6,
+                    where=correct,  alpha=0.08, color="green", step="post")
+    ax.fill_between(cyc, -0.4, N_CLASSES - 0.6,
+                    where=~correct, alpha=0.14, color="red",   step="post")
+
+    ax.set_yticks(range(N_CLASSES))
+    ax.set_yticklabels(["R>400", "R>300", "R>200", "R>100", "R<100"], fontsize=5)
+    ax.set_ylim(-0.4, N_CLASSES - 0.6)
+    ax.set_title(f"{cid}\nacc={r['accuracy']:.2%}", fontsize=7.5)
+    ax.tick_params(labelsize=6)
+    ax.grid(True, alpha=0.2)
+
+for ax in axes_flat[len(all_results):]:
+    ax.set_visible(False)
+
+legend_elements = [
+    Line2D([0], [0], color="#1565C0", lw=1.8,          label="True class"),
+    Line2D([0], [0], color="#E53935", lw=1.4, ls="--", label="Pred class"),
+    mpatches.Patch(color="green", alpha=0.2,            label="Correct"),
+    mpatches.Patch(color="red",   alpha=0.25,           label="Incorrect"),
+]
+fig.legend(handles=legend_elements, loc="lower center",
+           ncol=4, fontsize=9, bbox_to_anchor=(0.5, -0.02))
+
+plt.savefig("all_cells_clf.png", dpi=130, bbox_inches="tight")
+plt.show()
+
+# ── Summary stats ─────────────────────────────────────────────────────────────
+accs = [r["accuracy"] for r in all_results.values()]
+print(f"\nAll-cell accuracy  mean={np.mean(accs):.4f}  "
+      f"std={np.std(accs):.4f}  "
+      f"min={np.min(accs):.4f}  "
+      f"max={np.max(accs):.4f}")
+### CELL 11
+from matplotlib import colormaps
+
+cycle_lives = [r["cycle_life"] for r in all_results.values()]
+vmin, vmax  = min(cycle_lives), max(cycle_lives)
+cmap        = colormaps.get_cmap("plasma")
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
+fig.suptitle("All Cells Overlay — Predicted vs True RUL Class, Coloured by Cycle Life",
+             fontsize=13, fontweight="bold")
+
+for ax, key in zip(axes, ["true_classes", "pred_classes"]):
+    label = "Ground Truth" if key == "true_classes" else "Predicted"
+    for r in all_results.values():
+        cyc   = r["end_cycles"]
+        color = cmap((r["cycle_life"] - vmin) / (vmax - vmin + 1e-9))
+        ax.step(cyc, r[key], where="post", color=color, alpha=0.6, lw=1.2)
+
+    ax.set_yticks(range(N_CLASSES))
+    ax.set_yticklabels(CLASS_NAMES, fontsize=8)
+    ax.set_ylim(-0.4, N_CLASSES - 0.6)
+    ax.set_title(label, fontsize=12)
+    ax.set_xlabel("Window End Cycle", fontsize=11)
+    ax.set_ylabel("RUL Class", fontsize=11)
+    ax.grid(True, alpha=0.2)
+
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+sm.set_array([])
+cbar = fig.colorbar(sm, ax=axes, fraction=0.02, pad=0.02)
+cbar.set_label("Cycle Life", fontsize=11)
+
+plt.savefig(f"overlay_all_cells_clf_{dataset}.png", dpi=150, bbox_inches="tight")
+plt.show()
+### CELL 13
+# ── NEOL estimation from sliding-window predictions ────────────────────────────
+# NEOL = first window-end cycle where predicted/true class == 4 (RUL < 100)
+
+eol_true_list, eol_pred_list, cid_list = [], [], []
+
+for cid, r in all_results.items():
+    cycles   = r["end_cycles"]
+    true_cls = r["true_classes"]
+    pred_cls = r["pred_classes"]
+
+    # true NEOL: first cycle where true class == 4, fallback to cycle_life
+    true_hits = cycles[true_cls == 4]
+    eol_true  = int(true_hits[0]) if len(true_hits) > 0 else r["cycle_life"]
+
+    # pred NEOL: first cycle where predicted class == 4, fallback to last cycle
+
+    transitions = np.where((pred_cls[:-1] == 3) & (pred_cls[1:] == 4))[0]
+    if len(transitions) > 0:
+        eol_pred = int(cycles[transitions[0] + 1])  # first cycle in class 4
+    else:
+        # fallback: first cycle directly labelled class 4
+        pred_hits = cycles[pred_cls == 4]
+        eol_pred  = int(pred_hits[0]) if len(pred_hits) > 0 else int(cycles[-1])
+
+    eol_true_list.append(eol_true)
+    eol_pred_list.append(eol_pred)
+    cid_list.append(cid)
+
+eol_true = np.array(eol_true_list)
+eol_pred = np.array(eol_pred_list)
+eol_err  = eol_pred - eol_true
+
+mae_eol  = float(np.mean(np.abs(eol_err)))
+mape_eol = float(np.mean(np.abs(eol_err) / (eol_true + 1e-6)) * 100)
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+fig.suptitle("Near End-of-Life Estimation from Classification model", fontsize=13, fontweight="bold")
+
+# ── Parity plot ───────────────────────────────────────────────────────────────
+ax  = axes[0]
+lim = [min(eol_true.min(), eol_pred.min()) - 50,
+       max(eol_true.max(), eol_pred.max()) + 50]
+
+sc = ax.scatter(eol_true, eol_pred, c=np.abs(eol_err),
+                cmap="RdYlGn_r", s=60, edgecolors="k", linewidths=0.4, zorder=3)
+plt.colorbar(sc, ax=ax, label="|NEOL error| (cycles)")
+ax.plot(lim, lim, "k--", lw=1.2, label="Perfect prediction")
+ax.fill_between(lim, [l - 100 for l in lim], [l + 100 for l in lim],
+                alpha=0.1, color="green", label="±100 cycle band")
+ax.set_xlabel("True NEOL (cycles)",      fontsize=11)
+ax.set_ylabel("Predicted NEOL (cycles)", fontsize=11)
+ax.set_title("NEOL Parity Plot\n(first cycle predicted as RUL < 100)")
+ax.set_xlim(lim); ax.set_ylim(lim)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.25)
+ax.text(0.04, 0.92, f"MAE = {mae_eol:.1f} cycles\nMAPE = {mape_eol:.1f}%",
+        transform=ax.transAxes, fontsize=10,
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.85))
+
+# ── Error histogram ───────────────────────────────────────────────────────────
+ax = axes[1]
+ax.hist(eol_err, bins=20, color="#1976D2", edgecolor="white", linewidth=0.6)
+ax.axvline(0,              color="black", lw=1.5, ls="--", label="Zero error")
+ax.axvline(eol_err.mean(), color="red",   lw=1.5, ls="-",
+           label=f"Mean error = {eol_err.mean():.1f} cycles")
+ax.set_xlabel("NEOL Prediction Error", fontsize=11)
+ax.set_ylabel("Count", fontsize=11)
+ax.set_title("NEOL Error Distribution")
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.25)
+ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+
+plt.tight_layout()
+plt.savefig(f"eol_parity_clf_{dataset}.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+print(f"Cells evaluated : {len(eol_true)}")
+print(f"NEOL MAE         : {mae_eol:.1f} cycles")
+print(f"NEOL MAPE        : {mape_eol:.1f}%")
+print(f"Mean error      : {eol_err.mean():.1f} cycles  (+ = over-predict)")
+print(f"Std error       : {eol_err.std():.1f} cycles")
+### CELL 15
+# ── Per-cell results table ─────────────────────────────────────────────────────
+print(f'{"Cell":>12} | {"CycLife":>7} | {"NEOL_True":>8} | {"NEOL_Pred":>8} | '
+      f'{"NEOL_Err":>8} | {"Acc":>7}')
+print('-' * 62)
+
+for cid in sorted(all_results.keys()):
+    r        = all_results[cid]
+    cycles   = r["end_cycles"]
+    true_cls = r["true_classes"]
+    pred_cls = r["pred_classes"]
+
+    true_hits = cycles[true_cls == 4]
+    eol_t     = int(true_hits[0]) if len(true_hits) > 0 else r["cycle_life"]
+
+    pred_hits = cycles[pred_cls == 4]
+    eol_p     = int(pred_hits[0]) if len(pred_hits) > 0 else int(cycles[-1])
+
+    err = eol_p - eol_t
+    print(f'{cid:>12} | {r["cycle_life"]:7d} | {eol_t:8d} | '
+          f'{eol_p:8d} | {err:+8d} | {r["accuracy"]:7.2%}')
+
+print('-' * 62)
+print(f'{"MEAN":>12} | {"":>7} | {"":>8} | {"":>8} | '
+      f'{eol_err.mean():+8.1f} | {np.mean([r["accuracy"] for r in all_results.values()]):7.2%}')
+print(f'{"MAE":>12} | {"":>7} | {"":>8} | {"":>8} | '
+      f'{mae_eol:8.1f} | ')
+print(f'{"MAPE":>12} | {"":>7} | {"":>8} | {"":>8} | '
+      f'{mape_eol:7.1f}% | ')
+### CELL 16
+# ── Confusion Matrix Visualization ───────────────────────────────────────────
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+# cm = np.array([
+#  [2166,  459,    2,    0,    0],
+#  [ 117, 2230,  350,    0,    0],
+#  [   0,  344, 2149,  207,    0],
+#  [   0,    0,  357, 2019,  324],
+#  [   0,    0,    0,  274, 2486],
+# ])
+
+cm = np.array(
+[[1335,  109,    0,    0,    0],
+ [ 185, 1028,  231,    0,    0],
+ [   0,  178, 1148,  118,    0],
+ [   0,    0,  170, 1186,   88],
+ [   0,    0,    0,   99, 1345],
+])
+
+CLASS_NAMES = ['RUL>400', 'RUL 300-400', 'RUL 200-300', 'RUL 100-200', 'RUL<100']
+
+# normalize by row (recall per class)
+cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+fig.suptitle('Confusion Matrix — 5-Class RUL Classification', fontsize=13, fontweight='bold')
+
+for ax, data, title, fmt in zip(
+    axes,
+    [cm, cm_norm],
+    ['Raw Counts', 'Row-Normalized (Recall)'],
+    ['.0f', '.2f']
+):
+    im = ax.imshow(data, cmap='Blues', vmin=0,
+                   vmax=data.max() if fmt == '.0f' else 1.0)
+
+    # annotate cells
+    thresh = data.max() / 2.0
+    for i in range(5):
+        for j in range(5):
+            val   = data[i, j]
+            color = 'white' if val > thresh else 'black'
+            ax.text(j, i, format(val, fmt), ha='center', va='center',
+                    fontsize=10, color=color, fontweight='bold' if i == j else 'normal')
+
+    # diagonal border highlight
+    for k in range(5):
+        ax.add_patch(plt.Rectangle((k - 0.5, k - 0.5), 1, 1,
+                     fill=False, edgecolor='#E53935', linewidth=2.0))
+
+    ax.set_xticks(range(5)); ax.set_xticklabels(CLASS_NAMES, rotation=20, ha='right', fontsize=9)
+    ax.set_yticks(range(5)); ax.set_yticklabels(CLASS_NAMES, fontsize=9)
+    ax.set_xlabel('Predicted Class', fontsize=11)
+    ax.set_ylabel('True Class', fontsize=11)
+    ax.set_title(title, fontsize=11)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+plt.tight_layout()
+plt.savefig(f'fig_confusion_matrix_{dataset}.png', dpi=150, bbox_inches='tight')
+plt.show()
+print(f'Saved: fig_confusion_matrix_{dataset}.png')
+
+# ── Per-class stats ───────────────────────────────────────────────────────────
+print(f'\n{"Class":>12} | {"Precision":>10} | {"Recall":>8} | {"F1":>8} | {"Support":>8}')
+print('-' * 58)
+for i, name in enumerate(CLASS_NAMES):
+    tp  = cm[i, i]
+    fp  = cm[:, i].sum() - tp
+    fn  = cm[i, :].sum() - tp
+    p   = tp / (tp + fp) if (tp + fp) > 0 else 0
+    r   = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1  = 2 * p * r / (p + r) if (p + r) > 0 else 0
+    sup = cm[i, :].sum()
+    print(f'{name:>12} | {p:>10.3f} | {r:>8.3f} | {f1:>8.3f} | {sup:>8d}')
+acc = np.trace(cm) / cm.sum()
+print(f'\nOverall accuracy: {acc:.4f}  ({np.trace(cm):,} / {cm.sum():,})')
+### CELL 17
+# Test Loss: 0.4594  Accuracy: 0.8411
+
+# Classification Report:
+#               precision    recall  f1-score   support
+
+#      RUL>400       0.87      0.96      0.91      1696
+#      RUL>300       0.81      0.72      0.76      1600
+#      RUL>200       0.75      0.78      0.77      1600
+#      RUL>100       0.83      0.82      0.82      1600
+#      RUL<100       0.96      0.91      0.93      1552
+
+#     accuracy                           0.84      8048
+#    macro avg       0.84      0.84      0.84      8048
+# weighted avg       0.84      0.84      0.84      8048
+
+# Confusion Matrix:
+# [[1636   60    0    0    0]
+#  [ 246 1160  194    0    0]
+#  [   0  219 1252  129    0]
+#  [   0    0  220 1316   64]
+#  [   0    0    0  147 1405]]
+
+ 
+ # ── Confusion Matrix Visualization ───────────────────────────────────────────
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+
+
+cm = np.array(
+[[1335,  109,    0,    0,    0],
+ [ 185, 1028,  231,    0,    0],
+ [   0,  178, 1148,  118,    0],
+ [   0,    0,  170, 1186,   88],
+ [   0,    0,    0,   99, 1345],
+])
+
+
+CLASS_NAMES = ['RUL>400', 'RUL 300-400', 'RUL 200-300', 'RUL 100-200', 'RUL<100']
+
+# normalize by row (recall per class)
+cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+fig.suptitle('Confusion Matrix: Opimized with Evolution Stratery', fontsize=13, fontweight='bold')
+
+for ax, data, title, fmt in zip(
+    axes,
+    [cm, cm_norm],
+    ['Raw Counts', 'Row-Normalized (Recall)'],
+    ['.0f', '.2f']
+):
+    im = ax.imshow(data, cmap='Blues', vmin=0,
+                   vmax=data.max() if fmt == '.0f' else 1.0)
+
+    # annotate cells
+    thresh = data.max() / 2.0
+    for i in range(5):
+        for j in range(5):
+            val   = data[i, j]
+            color = 'white' if val > thresh else 'black'
+            ax.text(j, i, format(val, fmt), ha='center', va='center',
+                    fontsize=10, color=color, fontweight='bold' if i == j else 'normal')
+
+    # diagonal border highlight
+    for k in range(5):
+        ax.add_patch(plt.Rectangle((k - 0.5, k - 0.5), 1, 1,
+                     fill=False, edgecolor='#E53935', linewidth=2.0))
+
+    ax.set_xticks(range(5)); ax.set_xticklabels(CLASS_NAMES, rotation=20, ha='right', fontsize=9)
+    ax.set_yticks(range(5)); ax.set_yticklabels(CLASS_NAMES, fontsize=9)
+    ax.set_xlabel('Predicted Class', fontsize=11)
+    ax.set_ylabel('True Class', fontsize=11)
+    ax.set_title(title, fontsize=11)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+plt.tight_layout()
+plt.savefig('images/fig_confusion_matrix_ES.png', dpi=150, bbox_inches='tight')
+plt.show()
+print('Saved: images/fig_confusion_matrix_ES.png')
+
+# ── Per-class stats ───────────────────────────────────────────────────────────
+print(f'\n{"Class":>12} | {"Precision":>10} | {"Recall":>8} | {"F1":>8} | {"Support":>8}')
+print('-' * 58)
+for i, name in enumerate(CLASS_NAMES):
+    tp  = cm[i, i]
+    fp  = cm[:, i].sum() - tp
+    fn  = cm[i, :].sum() - tp
+    p   = tp / (tp + fp) if (tp + fp) > 0 else 0
+    r   = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1  = 2 * p * r / (p + r) if (p + r) > 0 else 0
+    sup = cm[i, :].sum()
+    print(f'{name:>12} | {p:>10.3f} | {r:>8.3f} | {f1:>8.3f} | {sup:>8d}')
+acc = np.trace(cm) / cm.sum()
+print(f'\nOverall accuracy: {acc:.4f}  ({np.trace(cm):,} / {cm.sum():,})')
+### CELL 18
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+
+
+cm = np.array(
+[[1331,  113,    0,    0,    0],
+ [  87, 1165,  192,    0,    0],
+ [   1,  143, 1203,   97,    0],
+ [   0,    3,  188, 1174,   79],
+ [   0,    0,    0,  122, 1322],
+])
+
+
+CLASS_NAMES = ['RUL>400', 'RUL 300-400', 'RUL 200-300', 'RUL 100-200', 'RUL<100']
+
+# normalize by row (recall per class)
+cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+fig.suptitle('Confusion Matrix: Opimized with Evolution Stratery', fontsize=13, fontweight='bold')
+
+for ax, data, title, fmt in zip(
+    axes,
+    [cm, cm_norm],
+    ['Raw Counts', 'Row-Normalized (Recall)'],
+    ['.0f', '.2f']
+):
+    im = ax.imshow(data, cmap='Blues', vmin=0,
+                   vmax=data.max() if fmt == '.0f' else 1.0)
+
+    # annotate cells
+    thresh = data.max() / 2.0
+    for i in range(5):
+        for j in range(5):
+            val   = data[i, j]
+            color = 'white' if val > thresh else 'black'
+            ax.text(j, i, format(val, fmt), ha='center', va='center',
+                    fontsize=10, color=color, fontweight='bold' if i == j else 'normal')
+
+    # diagonal border highlight
+    for k in range(5):
+        ax.add_patch(plt.Rectangle((k - 0.5, k - 0.5), 1, 1,
+                     fill=False, edgecolor='#E53935', linewidth=2.0))
+
+    ax.set_xticks(range(5)); ax.set_xticklabels(CLASS_NAMES, rotation=20, ha='right', fontsize=9)
+    ax.set_yticks(range(5)); ax.set_yticklabels(CLASS_NAMES, fontsize=9)
+    ax.set_xlabel('Predicted Class', fontsize=11)
+    ax.set_ylabel('True Class', fontsize=11)
+    ax.set_title(title, fontsize=11)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+plt.tight_layout()
+plt.savefig(f'images/fig_confusion_matrix_{dataset}.png', dpi=150, bbox_inches='tight')
+plt.show()
+print(f'Saved: images/fig_confusion_matrix_{dataset}.png')
+
+# ── Per-class stats ───────────────────────────────────────────────────────────
+print(f'\n{"Class":>12} | {"Precision":>10} | {"Recall":>8} | {"F1":>8} | {"Support":>8}')
+print('-' * 58)
+for i, name in enumerate(CLASS_NAMES):
+    tp  = cm[i, i]
+    fp  = cm[:, i].sum() - tp
+    fn  = cm[i, :].sum() - tp
+    p   = tp / (tp + fp) if (tp + fp) > 0 else 0
+    r   = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1  = 2 * p * r / (p + r) if (p + r) > 0 else 0
+    sup = cm[i, :].sum()
+    print(f'{name:>12} | {p:>10.3f} | {r:>8.3f} | {f1:>8.3f} | {sup:>8d}')
+acc = np.trace(cm) / cm.sum()
+print(f'\nOverall accuracy: {acc:.4f}  ({np.trace(cm):,} / {cm.sum():,})')
+### CELL 19
+

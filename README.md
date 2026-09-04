@@ -2,7 +2,7 @@
 
 Sliding-window RUL (Remaining Useful Life) classification of lithium-ion cells from the [BatteryML](https://github.com/microsoft/BatteryML) corpus. A window of consecutive cycles is classified into one of 5 RUL bands.
 
-> **Fork note** — this is a bug-fix and slim-down of [PhanLeSon03/battery_estimation](https://github.com/PhanLeSon03/battery_estimation). The upstream MIT-Stanford pipeline has been removed and the BatteryML path rewritten; see [document/what_changed_txt.docx](document/what_changed_txt.docx) for the measured differences.
+> **Fork note** — this is a bug-fix and slim-down of [PhanLeSon03/battery_estimation](https://github.com/PhanLeSon03/battery_estimation). The upstream MIT-Stanford pipeline has been removed and the BatteryML path rewritten; see [document/what_changed.md](document/what_changed.md) for the measured differences.
 
 ## RUL class boundaries
 
@@ -211,7 +211,7 @@ battery_estimation/
 ├── train_clf_es_bml_V2.py          # sparse CMA-ES trainer
 ├── predict_clf_bml_V2.ipynb        # inference & visualisation
 ├── RunToTrain/                     # PowerShell batch-run wrappers (see Automation scripts)
-├── document/                       # what_changed_txt.docx and other reference docs
+├── document/                       # what_changed.md and other reference docs
 └── README.md
 ```
 

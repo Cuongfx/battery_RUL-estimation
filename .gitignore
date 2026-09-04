@@ -4,3 +4,5 @@ __pycache__/
 docx/
 intro_gpu_rptu.md
 run_train.sh
+jobs/
+logs/

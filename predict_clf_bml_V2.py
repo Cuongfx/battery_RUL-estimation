@@ -518,10 +518,24 @@ def main():
     model, cfg, arch = load_model(args.ckpt_dir, device)
     data_dir = resolve_data_dir(args, cfg)
 
-    # The transformer trainer does not record the window, so fall back to
-    # the dataset module's defaults for those checkpoints.
+    # Only train_clf_bml_V2 exposes --n_early/--n_random and records them.
+    # The ES and transformer trainers always use the dataset module's
+    # constants, so those checkpoints fall back to whatever they are now.
     n_early = cfg.get("n_early", N_EARLY)
     n_random = cfg.get("n_random", N_RANDOM)
+
+    # All three trainers record n_input, so the fallback can be checked
+    # rather than trusted: editing N_EARLY/N_RANDOM after training would
+    # otherwise silently score the model on a window it never saw.
+    recorded_input = cfg.get("n_input")
+    if recorded_input is not None and n_early + n_random != recorded_input:
+        sys.exit(
+            f"ERROR: window mismatch. The checkpoint was trained with "
+            f"n_input={recorded_input}, but this run would use "
+            f"n_early={n_early} + n_random={n_random} = {n_early + n_random}.\n"
+            f"       N_EARLY/N_RANDOM in dataset_clf_bml_v2.py have changed "
+            f"since training. Restore them, or re-train."
+        )
 
     print(f"Device      : {device}")
     print(f"Architecture: {arch}")

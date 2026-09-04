@@ -2,7 +2,7 @@
 
 Sliding-window RUL (Remaining Useful Life) classification of lithium-ion cells from the [BatteryML](https://github.com/microsoft/BatteryML) corpus. A window of consecutive cycles is classified into one of 5 RUL bands.
 
-> **Fork note** — this is a bug-fix and slim-down of [PhanLeSon03/battery_estimation](https://github.com/PhanLeSon03/battery_estimation). The upstream MIT-Stanford pipeline has been removed and the BatteryML path rewritten; see [What changed](#what-changed) for the measured differences.
+> **Fork note** — this is a bug-fix and slim-down of [PhanLeSon03/battery_estimation](https://github.com/PhanLeSon03/battery_estimation). The upstream MIT-Stanford pipeline has been removed and the BatteryML path rewritten; see [document/what_changed_txt.docx](document/what_changed_txt.docx) for the measured differences.
 
 ## RUL class boundaries
 
@@ -19,87 +19,14 @@ Boundaries live in one place (`RUL_EDGES` in `dataset_clf_bml_v2.py`); class cou
 ---
 
 ## Table of Contents
-- [What changed](#what-changed)
 - [Pipeline](#pipeline)
 - [Usage](#usage)
 - [Automation scripts](#automation-scripts)
 - [Model architectures](#model-architectures)
 - [Feature engineering](#feature-engineering)
 - [File structure](#file-structure)
-- [Results](#results)
+- [Known issue](#known-issue)
 - [Citation](#citation)
-
----
-
-## What changed
-
-Every claim below was verified by running the code, not by reading it.
-
-### Dependency graph
-
-Before, importing any BatteryML trainer pulled in the entire MIT pipeline:
-
-```
-train_clf_bml -> train_clf -> dataset_clf -> gen_features -> h5py
-```
-
-`train_clf.py` mixed two jobs in one file: the shared model definitions (lines 29–170) and its own MIT-dataset CLI. Python cannot import half a file, so borrowing the model meant loading the dataset layer of a corpus you were not using. The shared half is now `model_clf.py`, which imports nothing but `torch` and `numpy`.
-
-```
-train_clf_bml_V2      -> model_clf, dataset_clf_bml_v2   (no MIT modules)
-train_clf_es_bml_V2   -> model_clf, dataset_clf_bml_v2
-train_clf_bml_tf_V2   -> dataset_clf_bml_v2              (model inlined)
-dataset_clf_bml_v2    -> gen_feature_bml_v2
-model_clf             -> (nothing)
-```
-
-Repository went from 20 files to 7.
-
-### Bugs fixed
-
-**Feature export / dataset**
-
-| Bug | Effect |
-|---|---|
-| `"Qc": qd` — charge capacity keyed to the discharge array | Silent duplicate of `Qd` the moment `Qc` is enabled |
-| Loader re-ran its own EOL search over already-truncated arrays | Undid the exporter's confirmation-window rule on 4/169 MATR cells, one by up to 113 cycles |
-| Missing `.npz` key returned an empty array | Feature column became a constant zero; training ran, accuracy silently dropped |
-| `dqdv` loaded but never read | 194 MB of resident memory across 64 cells |
-| Scaler fitted on one concatenated block | 2.56 GB peak; `partial_fit` in chunks peaks at 32 MB with bit-identical `transform` output |
-
-**Sparse CMA-ES trainer**
-
-| Bug | Effect |
-|---|---|
-| `mask = abs(w) <= threshold` under a comment reading *keep LARGE weights* | Evolved the **smallest** weights — the exact opposite of the design |
-| `_ES_MODULES` listed all five submodules | 34/34 parameter tensors were maskable, so nothing was frozen despite the docstring |
-| `train_loader=val_loader, val_loader=train_loader` at the call site | Fitness was measured on the training split |
-| `cnn_dim` reconstructed as `head[0].in_features // 2` | Equals `gru_dim`, not `cnn_dim`; every worker crashed once the two differed |
-| `except Exception: put((rank, 0.0))` with no logging | Worker crashes were indistinguishable from genuinely bad offspring |
-| `best_acc` assigned once before the loop, then returned | Early-stop gate and return value both frozen at the pre-search value |
-
-**Transformer trainer**
-
-| Bug | Effect |
-|---|---|
-| `_build_pos_enc` defined, never called in `forward` | `f(x)` and `f(reversed x)` matched to **0.000000** — the window was an unordered bag |
-| `classification_report` without `labels=` | `ValueError` whenever the test split lacked a class |
-| No seeding anywhere | Two runs of the same command produced different models |
-
-**Shared across trainers**
-
-- `ReduceLROnPlateau(verbose=True)` — removed from PyTorch; the trainer crashed before the first epoch
-- `import cma` at module level — blocked `--es_mode 0`, which uses no CMA-ES
-- `torch.manual_seed` without `cudnn.deterministic` — `VaLoss` still drifted (0.8858 / 0.8850 / 0.8846); pinning cuDNN makes runs match digit for digit
-- `va_acc >= best_val_acc` — re-saved the checkpoint on ties, so stagnation never accumulated
-- CMA-ES branch left the model holding parameters that scored *worse* than the checkpoint on disk
-
-### Added
-
-- `model_config.json` beside every checkpoint, so the notebook rebuilds the architecture instead of retyping it
-- `Info_log.txt` mirroring console output (verified byte-identical)
-- Deterministic seeding across `random`, `numpy`, `torch`, CUDA and cuDNN
-- Positional encoding actually applied in the transformer
 
 ---
 
@@ -171,17 +98,17 @@ Open `predict_clf_bml_V2.ipynb`, set `dataset` and `CKPT_DIR`, run all. Produces
 
 ## Automation scripts
 
-PowerShell wrappers that chain the CLI calls above for batch runs. Each accepts `-ExecutionPolicy Bypass -File .\<script>.ps1` and prints its own progress/summary; a non-zero Windows teardown exit code from CUDA (see [Known issue](#known-issue)) is treated as benign, not a failure.
+PowerShell wrappers that chain the CLI calls above for batch runs, kept in `RunToTrain/`. Each accepts `-ExecutionPolicy Bypass -File .\RunToTrain\<script>.ps1`, `cd`s to the repo root on its own (so it works no matter where you launch it from) and prints its own progress/summary; a non-zero Windows teardown exit code from CUDA (see [Known issue](#known-issue)) is treated as benign, not a failure.
 
 | Script | Purpose | Trains |
 |---|---|---|
-| `run_dataset.ps1` | Scans every raw `.pkl` folder under `Raw/Raw_BML/` and runs `gen_feature_bml_v2.py` on each, producing the `.npz` dataset in `content_bml/<folder>`. Run this first — nothing else works without it. | — (feature export only) |
-| `run_train_all_default.ps1` | Trains the default model (`train_clf_bml_V2.py`, CNN+BiGRU) on each folder's already-built dataset, with default hyperparameters. | 1 model x N folders |
-| `run_train_all_model.ps1` | Trains all three architectures — default (`train_clf_bml_V2.py`), CMA-ES (`train_clf_es_bml_V2.py`), and Transformer (`train_clf_bml_transformer_V2.py`) — selected via `-TrainScript 1/2/3` (or an interactive prompt if omitted). CMA-ES needs a checkpoint already produced by `-TrainScript 1`. | 1 of 3 models x N folders per run |
-| `run_model_adjust.ps1` | Grid search over model width/depth — `cnn_dim` x `gru_dim` x `gru_layers` — training `train_clf_bml_V2.py` repeatedly on one dataset (`-ContentDir`, default `./content_bml/LFP`) to see how CNN/GRU layer sizing affects accuracy. | 1 model, many configs |
-| `run_exp_15.ps1` | Grid search over the input window — `N_EARLY` x `N_RANDOM` (values 2–10) — on one dataset (`-ContentDir`, default `./content_bml/MATR`), 5 repeats per combo, to see how much lead-in vs. random-window history the model needs. | 1 model, many configs |
+| `RunToTrain/run_dataset.ps1` | Scans every raw `.pkl` folder under `Raw/Raw_BML/` and runs `gen_feature_bml_v2.py` on each, producing the `.npz` dataset in `content_bml/<folder>`. Run this first — nothing else works without it. | — (feature export only) |
+| `RunToTrain/run_train_all_default.ps1` | Trains the default model (`train_clf_bml_V2.py`, CNN+BiGRU) on each folder's already-built dataset, with default hyperparameters. | 1 model x N folders |
+| `RunToTrain/run_train_all_model.ps1` | Trains all three architectures — default (`train_clf_bml_V2.py`), CMA-ES (`train_clf_es_bml_V2.py`), and Transformer (`train_clf_bml_transformer_V2.py`) — selected via `-TrainScript 1/2/3` (or an interactive prompt if omitted). CMA-ES needs a checkpoint already produced by `-TrainScript 1`. | 1 of 3 models x N folders per run |
+| `RunToTrain/run_model_adjust.ps1` | Grid search over model width/depth — `cnn_dim` x `gru_dim` x `gru_layers` — training `train_clf_bml_V2.py` repeatedly on one dataset (`-ContentDir`, default `./content_bml/LFP`) to see how CNN/GRU layer sizing affects accuracy. | 1 model, many configs |
+| `RunToTrain/run_exp_15.ps1` | Grid search over the input window — `N_EARLY` x `N_RANDOM` (values 2–10) — on one dataset (`-ContentDir`, default `./content_bml/MATR`), 5 repeats per combo, to see how much lead-in vs. random-window history the model needs. | 1 model, many configs |
 
-Typical order: `run_dataset.ps1` → `run_train_all_default.ps1` (or `run_train_all_model.ps1` for all three architectures) → `run_model_adjust.ps1` / `run_exp_15.ps1` for hyperparameter sweeps once a baseline works.
+Typical order: `RunToTrain\run_dataset.ps1` → `RunToTrain\run_train_all_default.ps1` (or `RunToTrain\run_train_all_model.ps1` for all three architectures) → `RunToTrain\run_model_adjust.ps1` / `RunToTrain\run_exp_15.ps1` for hyperparameter sweeps once a baseline works.
 
 ---
 
@@ -283,6 +210,8 @@ battery_estimation/
 ├── train_clf_bml_transformer_V2.py # transformer trainer, self-contained
 ├── train_clf_es_bml_V2.py          # sparse CMA-ES trainer
 ├── predict_clf_bml_V2.ipynb        # inference & visualisation
+├── RunToTrain/                     # PowerShell batch-run wrappers (see Automation scripts)
+├── document/                       # what_changed_txt.docx and other reference docs
 └── README.md
 ```
 
@@ -340,13 +269,7 @@ The arrows only point one way: `gen_feature_bml_v2` never imports from `dataset_
 
 ---
 
-## Results
-
-The accuracy figures and plots in the upstream README were produced by the MIT-Stanford pipeline, which this fork no longer contains, so they are not reproducible here and have been removed rather than carried over unchanged.
-
-Numbers for this pipeline have not been published yet: the runs used during the rewrite were 1–3 epoch smoke tests on 12 cells, kept deliberately small to verify correctness, and are far too short to quote as results. Train on the full corpus to generate them — every run writes its own `Info_log.txt` and `model_config.json`, so results stay traceable to the exact architecture that produced them.
-
-### Known issue
+## Known issue
 
 On Windows with CUDA, `train_clf_bml_V2.py` returns a non-zero exit code (`0xC0000409`) even on success. Traced with `faulthandler`: Python reaches the end, `atexit` handlers run, every artefact is written correctly — the fault occurs afterwards, while the CUDA libraries unload. Forcing CPU exits cleanly. This predates the rewrite and only matters when chaining commands or running CI.
 

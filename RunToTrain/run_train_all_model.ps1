@@ -7,12 +7,12 @@
 #
 # Requires content_bml/<folder> to already exist (run run_dataset.ps1 first).
 #
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File .\run_train_all_model.ps1
+# Usage (run from anywhere — the repo root is resolved automatically):
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_train_all_model.ps1
 #       (no -TrainScript -> prompts interactively for 1, 2 or 3)
-#   powershell -ExecutionPolicy Bypass -File .\run_train_all_model.ps1 -TrainScript 1
-#   powershell -ExecutionPolicy Bypass -File .\run_train_all_model.ps1 -TrainScript 2
-#   powershell -ExecutionPolicy Bypass -File .\run_train_all_model.ps1 -TrainScript 3
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_train_all_model.ps1 -TrainScript 1
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_train_all_model.ps1 -TrainScript 2
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_train_all_model.ps1 -TrainScript 3
 #       (TrainScript 3 needs a checkpoint already trained via -TrainScript 1
 #        at ./checkpoints_clf_bml_<folder>/best_clf_bml.pt)
 # ============================================================
@@ -20,6 +20,8 @@ param(
     [ValidateSet("1","2","3")]
     [string]$TrainScript = ""
 )
+
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 if ($TrainScript -eq "") {
     Write-Host ""

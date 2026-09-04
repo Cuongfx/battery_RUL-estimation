@@ -2,9 +2,11 @@
 # run_dataset.ps1
 # Phase 1 — Feature generation: gen_feature_bml_v2.py over each subfolder of Raw/Raw_BML
 #
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File .\run_dataset.ps1
+# Usage (run from anywhere — the repo root is resolved automatically):
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_dataset.ps1
 # ============================================================
+
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $rawFolders = @("HUST", "LFP", "MATR"
 )

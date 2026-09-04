@@ -3,13 +3,15 @@
 # Grid search: N_EARLY x N_RANDOM  (5x5 = 25 combos)
 # Each combo trained 5 times  ->  125 total runs, sequential
 #
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File .\run_exp_15.ps1
-#   powershell -ExecutionPolicy Bypass -File .\run_exp_15.ps1 -ContentDir "./content_bml/HUST"
+# Usage (run from anywhere — the repo root is resolved automatically):
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_exp_15.ps1
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_exp_15.ps1 -ContentDir "./content_bml/HUST"
 # ============================================================
 param(
     [string]$ContentDir = "./content_bml/MATR"
 )
+
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $earlyValues     = @(2, 4, 6, 8, 10)
 $randomValues    = @(2, 4, 6, 8, 10)

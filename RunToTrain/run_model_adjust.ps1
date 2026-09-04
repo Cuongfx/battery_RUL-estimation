@@ -3,13 +3,15 @@
 # Grid search: cnn_dim x gru_dim x gru_layers  (4x4x3 = 48 combos)
 # Each combo trained 3 times  ->  144 total runs, sequential
 #
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File .\run_model_adjust.ps1
-#   powershell -ExecutionPolicy Bypass -File .\run_model_adjust.ps1 -ContentDir "./content_bml/HUST"
+# Usage (run from anywhere — the repo root is resolved automatically):
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_model_adjust.ps1
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_model_adjust.ps1 -ContentDir "./content_bml/HUST"
 # ============================================================
 param(
     [string]$ContentDir = "./content_bml/LFP"
 )
+
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $cnnDims         = @(8, 16, 32, 64)
 $gruDims         = @(8, 16, 32, 64)

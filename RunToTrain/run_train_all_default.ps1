@@ -2,9 +2,11 @@
 # run_train_all_default.ps1
 # Phase 2 — Training with default hyperparameters: train_clf_bml_V2.py over each folder
 #
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File .\run_train_all_default.ps1
+# Usage (run from anywhere — the repo root is resolved automatically):
+#   powershell -ExecutionPolicy Bypass -File .\RunToTrain\run_train_all_default.ps1
 # ============================================================
+
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $folders = @("HUST", "LFP", "MATR"
 )

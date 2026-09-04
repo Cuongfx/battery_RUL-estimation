@@ -94,6 +94,18 @@ Each writes `best_clf_bml.pt`, `model_config.json`, both scalers, test predictio
 
 Open `predict_clf_bml_V2.ipynb`, set `dataset` and `CKPT_DIR`, run all. Produces the per-cell sliding-window plot, an all-cells grid, a cycle-life overlay, NEOL parity and error histogram, a per-cell table and confusion matrices.
 
+`predict_clf_bml_V2.py` is the same analysis without a notebook, writing everything to disk instead of inline:
+
+```bash
+python predict_clf_bml_V2.py --ckpt_dir ./checkpoints_clf_bml_MATR
+```
+
+It writes the five figures plus `report.txt` and `predict.md` into `./predict_bml_<name>/`, where `<name>` is the checkpoint folder minus its `checkpoints_clf_bml_` prefix — so `checkpoints_clf_bml_MATR_es` reports into `predict_bml_MATR_es` rather than overwriting the default run's output.
+
+`--data_dir` is optional: the dataset defaults to the `content_dir` the trainer recorded in `model_config.json`. `--cells` limits the analysis to named cells, `--device` forces cuda or cpu.
+
+Unlike the notebook it reads both architectures — the transformer's `model_config.json` records `d_model`, the CNN+GRU's records `gru_dim`, and the right class is rebuilt from whichever is present. It also takes `n_early`/`n_random` from that same config, so a `run_exp_15` checkpoint trained on a non-default window is scored with the window it was trained on instead of the module defaults.
+
 ---
 
 ## Automation scripts
@@ -210,6 +222,8 @@ battery_estimation/
 ├── train_clf_bml_transformer_V2.py # transformer trainer, self-contained
 ├── train_clf_es_bml_V2.py          # sparse CMA-ES trainer
 ├── predict_clf_bml_V2.ipynb        # inference & visualisation
+├── predict_clf_bml_V2.py           # same analysis, writes predict_bml_<name>/
+├── predict_bml_*/                  # per-checkpoint reports (generated)
 ├── RunToTrain/                     # PowerShell batch-run wrappers (see Automation scripts)
 ├── document/                       # what_changed.md and other reference docs
 └── README.md

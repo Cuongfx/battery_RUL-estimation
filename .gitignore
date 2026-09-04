@@ -7,3 +7,4 @@ run_train.sh
 RunToTrainServer/
 jobs/
 logs/
+predict_bml_*/

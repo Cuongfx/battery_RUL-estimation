@@ -1,8 +1,13 @@
-"""train_utils.py - Setup shared by every trainer in this repo.
+"""train_utils.py - Setup shared by the trainers in this repo.
 
-Four things every training run needs before it can start, none of which
+Four things a training run may need before it can start, none of which
 depend on which architecture is being trained: seeding, console/file
 logging, class naming, and a layer-by-layer model summary.
+
+``set_seed`` is the exception to "shared": only the CMA-ES trainer calls
+it. The gradient trainers deliberately leave weight init and cuDNN
+process-random so that repeating a config produces a spread to average
+over -- see their ``train`` docstrings.
 
 They lived in three copies before, byte-identical in code but each with
 its own docstring. That is exactly how the cuDNN determinism fix nearly

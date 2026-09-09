@@ -32,7 +32,7 @@ from dataset_clf_bml_v2 import (N_CLASSES, N_EARLY, N_RANDOM, RUL_EDGES,
                                 V_BINS, build_clf_dataloaders)
 from model_clf import (BatteryRULClassifier, OrdinalLoss, evaluate,
                        predict_cls, train_epoch)
-from train_utils import Tee, class_names, print_model_summary, set_seed
+from train_utils import Tee, class_names, print_model_summary
 
 
 def save_model_config(path: str, args, summary_feats: int) -> None:
@@ -139,8 +139,14 @@ def cmaes_run(model: nn.Module, val_loader, device: torch.device,
 
 
 def train(args) -> None:
-    """Run one training job end to end and write every artefact."""
-    set_seed(args.seed)
+    """Run one training job end to end and write every artefact.
+
+    No global seeding here on purpose: args.seed still fixes the
+    train/val/test split and window sampling (dataset_clf_bml_v2 derives
+    those from its own default_rng), but weight init, dropout and the cuDNN
+    kernel choice stay process-random so repeated runs of the same config
+    give a genuine spread to average over.
+    """
     os.makedirs(args.output_dir, exist_ok=True)
     log_path = os.path.join(args.output_dir, "Info_log.txt")
     log_f    = open(log_path, "w", encoding="utf-8")
